@@ -7,13 +7,14 @@ import sys
 site = Path(sys.argv[1])
 font = '<link rel="preload" href="/Academy-Exam/assets/Pinar-VF.woff" as="font" type="font/woff" crossorigin>'
 video_api = '<link rel="preconnect" href="https://siwmzffadbbhcyyppwzn.supabase.co" crossorigin>'
-stylesheet = re.compile(r'<link rel="stylesheet" href="(/[^"?]+\.css)(?:\?[^"]*)?">')
+stylesheet = re.compile(r'<link rel="stylesheet" href="((?:/|\./)[^"?]+\.css)(?:\?[^"]*)?">')
 relative_url = re.compile(r'url\(\s*["\']?(?!/|data:|https:|#)[^"\'/)][^)]*\)', re.I)
 entry_mobile_styles = """
 @media (hover:none),(pointer:coarse){
   .mofid-gradient-pointer{display:none}
   .mofid-gradient-blobs{filter:blur(20px)}
   .mofid-gradient-blob{animation:none}
+  .mofid-metal{animation:none!important}
   .academy-module,.academy-navigation,.academy-top-light{backdrop-filter:none;-webkit-backdrop-filter:none}
 }
 html[data-academy-app] :is(button,input,select,textarea){font-family:"Pinar VF",Tahoma,sans-serif}
@@ -28,7 +29,12 @@ def optimize_entry(path):
     matches = list(stylesheet.finditer(markup))
     if not matches:
         return
-    styles = [(site / link.group(1).lstrip("/")).read_text(encoding="utf-8") for link in matches]
+    paths = [link.group(1) for link in matches]
+    styles = [
+        ((site if href.startswith("/") else page.parent) / href.lstrip("./"))
+        .read_text(encoding="utf-8")
+        for href in paths
+    ]
     if any("@import" in style or relative_url.search(style) for style in styles):
         raise ValueError(f"Check stylesheet paths before bundling {path}")
 
@@ -54,7 +60,9 @@ def optimize_entry(path):
         markup,
         count=1,
     )
-    preload = font + (video_api if path.startswith("videoo/") else "")
+    preload = "" if path.startswith("learning-studio/") else font
+    if path.startswith("videoo/"):
+        preload += video_api
     page.write_text(markup.replace("<head>", "<head>\n" + preload, 1), encoding="utf-8")
 
 
@@ -64,6 +72,7 @@ def optimize_exam():
     if not public_network.is_file():
         return
     build_stamp = sha256()
+    build_stamp.update(Path(__file__).read_bytes())
     for asset in sorted(path.rglob("*")):
         if asset.is_file() and asset.name != "timing.json":
             build_stamp.update(asset.relative_to(path).as_posix().encode())
@@ -83,6 +92,18 @@ def optimize_exam():
         text, changed = re.subn(r"const loadStamp=[^\n]+;", "const loadStamp='" + revision + "';", text, count=1)
         if changed != 1:
             raise ValueError(f"Check the updated exam asset versions in {name}")
+        # Download the form and appearance while the timing client starts.
+        network_path = "../public-network.js" if name.startswith("Admin/") else "public-network.js"
+        network_loader = (
+            "await new Promise((resolve,reject)=>{const script=document.createElement('script');"
+            f"script.src=assetURL('{network_path}')"
+        )
+        if text.count(network_loader) != 1 or text.count("    readLiveTiming(),") != 1:
+            raise ValueError(f"Check the updated exam startup in {name}")
+        text = text.replace(network_loader, network_loader.replace("await ", "const networkReady="), 1)
+        text = text.replace("    readLiveTiming(),", "    networkReady.then(()=>readLiveTiming()),", 1)
+        test_mode = "if(new URL(location.href).searchParams.get('academy-test')==='1'){"
+        text = text.replace(test_mode, test_mode + "\n await networkReady;", 1)
         text = text.replace(
             "const options={cache:'no-store',credentials:'omit',signal:AbortSignal.timeout(8000)};",
             "const options={cache:'force-cache',credentials:'omit',signal:AbortSignal.timeout(8000)};",
@@ -100,7 +121,30 @@ def optimize_exam():
             text = text.replace("<head>", "<head>" + font, 1)
         page.write_text(text, encoding="utf-8")
 
+    admin_entry = path / "Admin" / "index.html"
+    markup = admin_entry.read_text(encoding="utf-8")
+    timestamp = "<script>document.getElementById('studio').src='secure.html?v=m20261010&ts='+Date.now();</script>"
+    if markup.count(timestamp) != 1:
+        raise ValueError("Check the updated exam admin frame")
+    markup = markup.replace(timestamp + "\n", "")
+    markup = markup.replace('<iframe id="studio"', f'<iframe src="secure.html?v={revision}" id="studio"', 1)
+    admin_entry.write_text(markup, encoding="utf-8")
 
-for entry in ("index.html", "videoo/index.html", "videoo/admin.html"):
+    admin_base = path / "Admin" / "base.html"
+    markup = admin_base.read_text(encoding="utf-8")
+    markup = markup.replace(
+        'href="https://mofid-academy.github.io/Academy-Exam/"',
+        'href="/Academy-Exam/"',
+        1,
+    )
+    admin_base.write_text(markup, encoding="utf-8")
+
+for entry in (
+    "index.html",
+    "videoo/index.html",
+    "videoo/admin.html",
+    "learning-studio/index.html",
+    "learning-studio/admin.html",
+):
     optimize_entry(entry)
 optimize_exam()

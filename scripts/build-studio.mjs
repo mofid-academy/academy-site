@@ -77,13 +77,15 @@ async function buildPage(page) {
     'studio-vendor');
   html = deferRuntime(html, /<script>(\s*\(function\(\)\{var e=Object\.create,t=Object\.defineProperty,[\s\S]*?)<\/script>/,
     page === 'index.html' ? 'studio-student' : 'studio-admin');
+  html = html.replace(/<script src="(\/academy-assets\/entry-ui\.js|\.\/teaching-presentation\.js)\?/g,
+    '<script defer src="$1?');
 
   const routingHead = page === 'index.html'
     ? "<script>if(new URLSearchParams(location.search).get('portal')==='admin'){location.replace(new URL('./admin.html',location.href));}</script>"
     : '<meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer">';
   const head = routingHead
     + '<link rel="preload" as="font" type="font/woff" crossorigin href="' + portableFont + '">'
-    + '<script src="./studio-domain-client.js" data-pdf="./' + pdfFile + '"></script>'
+    + '<script defer src="./studio-domain-client.js" data-pdf="./' + pdfFile + '"></script>'
     + '<style>'
     + 'html[data-academy-app="studio"] :is(body,button,input,select,textarea,[role="dialog"],[data-mobile="true"])'
     + '{font-family:"Pinar VF",Pinar,Tahoma,sans-serif}'
