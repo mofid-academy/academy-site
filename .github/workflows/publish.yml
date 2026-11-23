@@ -28,11 +28,26 @@ jobs:
           persist-credentials: false
           path: upstream
 
+      - name: Fetch the deployment scripts
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          path: deployment
+
+      - name: Fetch current Learning Studio
+        if: vars.ACADEMY_STUDIO_ON_DOMAIN != 'false'
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: mofid-academy/learning-studio
+          ref: main
+          persist-credentials: false
+          path: studio-upstream
+
       - name: Assemble Academy pages
         id: site
         env:
           EXAM_ON_DOMAIN: ${{ vars.ACADEMY_EXAM_ON_DOMAIN || 'true' }}
-          STUDIO_ON_DOMAIN: ${{ vars.ACADEMY_STUDIO_ON_DOMAIN }}
+          STUDIO_ON_DOMAIN: ${{ vars.ACADEMY_STUDIO_ON_DOMAIN || 'true' }}
           VIDEO_ON_DOMAIN: ${{ vars.ACADEMY_VIDEO_ON_DOMAIN || 'true' }}
         run: |
           set -eu
@@ -100,10 +115,9 @@ jobs:
               forward("Academy-Exam/Admin/index.html", "پنل ساخت و مدیریت آزمون")
               forward("Academy-Exam/Admin/secure.html", "پنل ساخت و مدیریت آزمون")
 
-          if enabled("STUDIO_ON_DOMAIN"):
-              shutil.copytree(source / "learning-studio", site / "learning-studio")
-          else:
+          if not enabled("STUDIO_ON_DOMAIN"):
               forward("learning-studio/index.html", "مفید استودیو")
+              forward("learning-studio/admin.html", "مدیریت مفید استودیو")
 
           if enabled("VIDEO_ON_DOMAIN"):
               shutil.copytree(
@@ -114,6 +128,10 @@ jobs:
               forward("videoo/index.html", "ویدیوهای آموزشی")
           forward("videoo/admin.html", "مدیریت ویدیوهای آموزشی")
           PY
+
+          if [ "$STUDIO_ON_DOMAIN" = true ]; then
+            node deployment/scripts/build-studio.mjs studio-upstream site/learning-studio deployment/scripts/studio-domain-client.js
+          fi
 
           revision=$(find site -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
           printf '%s\n' "$revision" > site/academy-release.txt
