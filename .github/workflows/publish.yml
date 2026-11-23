@@ -126,12 +126,14 @@ jobs:
               )
           else:
               forward("videoo/index.html", "ویدیوهای آموزشی")
-          forward("videoo/admin.html", "مدیریت ویدیوهای آموزشی")
+              forward("videoo/admin.html", "مدیریت ویدیوهای آموزشی")
           PY
 
           if [ "$STUDIO_ON_DOMAIN" = true ]; then
             node deployment/scripts/build-studio.mjs studio-upstream site/learning-studio deployment/scripts/studio-domain-client.js
           fi
+
+          python3 deployment/scripts/optimize-academy-site.py site
 
           revision=$(find site -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
           printf '%s\n' "$revision" > site/academy-release.txt

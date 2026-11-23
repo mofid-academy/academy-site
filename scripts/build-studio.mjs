@@ -25,6 +25,14 @@ function replaceOnce(text, before, after, name) {
   return text.replace(before, after);
 }
 
+function deferRuntime(text, pattern, name) {
+  const matched = text.match(pattern);
+  if (!matched) throw Error('Check the updated Studio ' + name);
+  const file = name + '-' + createHash('sha256').update(matched[1]).digest('hex').slice(0, 12) + '.js';
+  runtimeFiles.set(file, matched[1]);
+  return text.replace(matched[0], '<script defer src="./' + file + '"></script>');
+}
+
 async function buildPage(page) {
   let outputHtml;
   const runtime = {
@@ -65,6 +73,10 @@ async function buildPage(page) {
   const fontCount = [...html.matchAll(inlineFonts)].length;
   if (fontCount !== 2) throw Error('Check the updated Studio variable fonts');
   html = html.replace(inlineFonts, "$1url('" + portableFont + "') format('woff')");
+  html = deferRuntime(html, /<script>(\s*\(function\(\)\{var e=\{9306\(e,t,n\)[\s\S]*?)<\/script>/,
+    'studio-vendor');
+  html = deferRuntime(html, /<script>(\s*\(function\(\)\{var e=Object\.create,t=Object\.defineProperty,[\s\S]*?)<\/script>/,
+    page === 'index.html' ? 'studio-student' : 'studio-admin');
 
   const routingHead = page === 'index.html'
     ? "<script>if(new URLSearchParams(location.search).get('portal')==='admin'){location.replace(new URL('./admin.html',location.href));}</script>"
