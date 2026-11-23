@@ -1,0 +1,146 @@
+name: Publish Academy site
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: academy-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.site.outputs.publish }}
+    steps:
+      - name: Fetch current Academy site
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: mofid-academy/mofid-academy.github.io
+          ref: main
+          persist-credentials: false
+          path: upstream
+
+      - name: Assemble Academy pages
+        id: site
+        env:
+          EXAM_ON_DOMAIN: ${{ vars.ACADEMY_EXAM_ON_DOMAIN }}
+          STUDIO_ON_DOMAIN: ${{ vars.ACADEMY_STUDIO_ON_DOMAIN }}
+          VIDEO_ON_DOMAIN: ${{ vars.ACADEMY_VIDEO_ON_DOMAIN }}
+        run: |
+          set -eu
+          mkdir site
+          cp -a upstream/index.html upstream/academy-assets site/
+
+          python3 - <<'PY'
+          import html
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+
+          source = Path("upstream")
+          site = Path("site")
+          existing_site = "https://mofid-academy.github.io"
+
+          def forward(path, title):
+              # Temporary entry for a section whose API still uses the existing origin.
+              upstream_path = path.removesuffix("index.html") if path.endswith("/index.html") else path
+              destination = existing_site + "/" + upstream_path
+              link = html.escape(destination, quote=True)
+              title = html.escape(title)
+              page = site / path
+              page.parent.mkdir(parents=True, exist_ok=True)
+              page.write_text(
+                  '<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8">'
+                  f'<title>{title}</title>'
+                  f'<script>location.replace({json.dumps(destination)}'
+                  ' + location.search + location.hash)</script>'
+                  f'<noscript><meta http-equiv="refresh" content="0; url={link}"></noscript>'
+                  f'<p><a href="{link}">{title}</a></p></html>\n',
+                  encoding="utf-8",
+              )
+
+          def enabled(variable):
+              return os.environ.get(variable) == "true"
+
+          shutil.copytree(source / "Academy-Exam" / "assets", site / "Academy-Exam" / "assets")
+          if enabled("EXAM_ON_DOMAIN"):
+              shutil.copytree(source / "Academy-Exam", site / "Academy-Exam", dirs_exist_ok=True)
+              exam = site / "Academy-Exam"
+              # This deployment follows the same exam bank and lock as the existing site.
+              for page in (exam / "index.html", exam / "Admin" / "secure.html"):
+                  text = page.read_text(encoding="utf-8")
+                  needle = "readLiveTiming({localOnly:true})"
+                  if needle not in text:
+                      raise ValueError(f"Check the updated timing loader in {page}")
+                  page.write_text(text.replace(needle, "readLiveTiming()"), encoding="utf-8")
+              entry = exam / "index.html"
+              text = entry.read_text(encoding="utf-8")
+              needle = "fetch('base.html?v='+Date.now(),{cache:'no-store'})"
+              live_bank = existing_site + "/Academy-Exam/base.html"
+              if text.count(needle) != 1:
+                  raise ValueError(f"Check the updated question loader in {entry}")
+              read_bank = (
+                  f"fetch('{live_bank}?v='+Date.now(),"
+                  "{cache:'no-store',credentials:'omit',signal:AbortSignal.timeout(5000)})"
+                  ".then(response=>{if(!response.ok)throw Error('Live exam unavailable');return response;})"
+                  f".catch(()=>{needle})"
+              )
+              entry.write_text(text.replace(needle, read_bank), encoding="utf-8")
+          else:
+              forward("Academy-Exam/index.html", "ورود به آزمون آکادمی")
+              forward("Academy-Exam/Admin/index.html", "پنل ساخت و مدیریت آزمون")
+              forward("Academy-Exam/Admin/secure.html", "پنل ساخت و مدیریت آزمون")
+
+          if enabled("STUDIO_ON_DOMAIN"):
+              shutil.copytree(source / "learning-studio", site / "learning-studio")
+          else:
+              forward("learning-studio/index.html", "مفید استودیو")
+
+          if enabled("VIDEO_ON_DOMAIN"):
+              shutil.copytree(
+                  source / "videoo", site / "videoo",
+                  ignore=shutil.ignore_patterns("backend", "tests", "README.md"),
+              )
+          else:
+              forward("videoo/index.html", "ویدیوهای آموزشی")
+          forward("videoo/admin.html", "مدیریت ویدیوهای آموزشی")
+          PY
+
+          revision=$(find site -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+          printf '%s\n' "$revision" > site/academy-release.txt
+          current=$(curl -fsS --max-time 8 https://emofidacademy.ir/academy-release.txt 2>/dev/null || true)
+          if [ "$current" = "$revision" ] && [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload Pages artifact
+        if: steps.site.outputs.publish == 'true'
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: site
+
+  deploy:
+    if: needs.build.outputs.publish == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.release.outputs.page_url }}
+    steps:
+      - name: Deploy Academy Pages
+        id: release
+        uses: actions/deploy-pages@v4
