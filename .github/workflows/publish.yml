@@ -31,7 +31,7 @@ jobs:
       - name: Assemble Academy pages
         id: site
         env:
-          EXAM_ON_DOMAIN: ${{ vars.ACADEMY_EXAM_ON_DOMAIN }}
+          EXAM_ON_DOMAIN: ${{ vars.ACADEMY_EXAM_ON_DOMAIN || 'true' }}
           STUDIO_ON_DOMAIN: ${{ vars.ACADEMY_STUDIO_ON_DOMAIN }}
           VIDEO_ON_DOMAIN: ${{ vars.ACADEMY_VIDEO_ON_DOMAIN || 'true' }}
         run: |
