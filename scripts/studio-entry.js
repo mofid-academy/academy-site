@@ -59,8 +59,13 @@
 
     const watchdog = setTimeout(showRetry, 20000);
     try {
-      await Promise.all([loadScript(vendor), loadScript(presentation)]);
+      await Promise.all([
+        loadScript(vendor),
+        loadScript(presentation),
+        window.AcademyWorkspaceStyle?.loadStyles(),
+      ]);
       await loadScript(runtime);
+      window.AcademyWorkspaceStyle?.decorateWorkspace();
     } catch {
       clearTimeout(watchdog);
       showRetry();

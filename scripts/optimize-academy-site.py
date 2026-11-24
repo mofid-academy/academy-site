@@ -1,4 +1,5 @@
 from hashlib import sha256
+from html import escape
 import json
 from pathlib import Path
 import re
@@ -6,7 +7,8 @@ import sys
 
 
 site = Path(sys.argv[1])
-font = '<link rel="preload" href="/Academy-Exam/assets/Pinar-VF.woff" as="font" type="font/woff" crossorigin>'
+scripts = Path(__file__).parent
+font = '<link rel="preload" href="/Academy-Exam/assets/Pinar-VF.woff2" as="font" type="font/woff2" crossorigin>'
 video_api = '<link rel="preconnect" href="https://siwmzffadbbhcyyppwzn.supabase.co" crossorigin>'
 stylesheet = re.compile(r'<link rel="stylesheet" href="((?:/|\./)[^"?]+\.css)(?:\?[^"]*)?">')
 relative_url = re.compile(r'url\(\s*["\']?(?!/|data:|https:|#)[^"\'/)][^)]*\)', re.I)
@@ -21,7 +23,7 @@ entry_mobile_styles = """
 html[data-academy-app] :is(button,input,select,textarea){font-family:"Pinar VF",Tahoma,sans-serif}
 """
 exam_loading_style = """
-@font-face{font-family:"Pinar VF";src:url("/Academy-Exam/assets/Pinar-VF.woff") format("woff");font-weight:300 900;font-display:swap}
+@font-face{font-family:"Pinar VF";src:url("/Academy-Exam/assets/Pinar-VF.woff2") format("woff2"),url("/Academy-Exam/assets/Pinar-VF.woff") format("woff");font-weight:300 900;font-display:swap}
 #examEntry{font:400 1rem/1.9 "Pinar VF",Tahoma,sans-serif;max-width:34rem;margin:10vh auto;padding:1.5rem;
   background:#fafffc;border:1px solid #c4ddce;border-radius:1.25rem;box-sizing:border-box}
 #examEntry header{display:flex;align-items:center;gap:.6rem}#examEntry h1{font-size:1.5rem}
@@ -32,7 +34,7 @@ exam_loading_style = """
 """
 exam_loading_markup = """
 <main id="examEntry">
-  <header><img src="/Academy-Exam/assets/mofid-academy-logo.webp" alt="" width="48" height="48">
+  <header><img src="/Academy-Exam/assets/mofid-academy-logo-small.webp" alt="" width="48" height="48">
     <strong>آکادمی مفید | سامانه آزمون</strong></header>
   <h1>سلام، خوش آمدید</h1>
   <label for="examEntryName">نام سازمانی</label>
@@ -112,6 +114,53 @@ void beginExam();""",
     return text
 
 
+def path_to_asset(page, href):
+    return (site if href.startswith("/") else page.parent) / href.split("?", 1)[0].lstrip("./")
+
+
+def inline_javascript(source, attrs=""):
+    if "</script" in source.lower():
+        raise ValueError("An entry script contains an HTML closing tag")
+    return f"<script{attrs}>{source}</script>"
+
+
+def lean_entry(markup, page, bundle):
+    decorator = re.compile(r'<script(?: defer)? src="(/academy-assets/(?:entry-ui|lighting)\.js\?[^"]+)"[^>]*></script>')
+    effects = " ".join(m.group(1) for m in decorator.finditer(markup))
+    markup = decorator.sub("", markup)
+    attrs = (
+        f' data-academy-workspace-style="{bundle}"'
+        f' data-academy-workspace-effects="{escape(effects, quote=True)}"'
+    )
+    markup = markup.replace("<html ", "<html" + attrs + " ", 1)
+
+    foundation = (scripts / "academy-entry-critical.css").read_text(encoding="utf-8")
+    support_style = (site / "academy-assets/support.css").read_text(encoding="utf-8")
+    bootstrap = (scripts / "academy-entry-workspace.js").read_text(encoding="utf-8")
+    markup = markup.replace(
+        "</head>",
+        '<style id="academyEntryStyle">' + foundation + "</style>"
+        + '<style id="academySupportStyles">' + support_style + "</style>"
+        + inline_javascript(bootstrap) + "</head>",
+        1,
+    )
+    common = re.compile(r'<script defer src="(/academy-assets/(?:navigation|support)\.js\?[^"]+)"([^>]*)></script>')
+    common_at_end = [
+        inline_javascript(path_to_asset(page, match.group(1)).read_text(encoding="utf-8"), match.group(2))
+        for match in common.finditer(markup)
+    ]
+    markup = common.sub("", markup)
+    markup = markup.replace("</body>", "".join(common_at_end) + "</body>", 1)
+
+    studio_start = re.compile(r'<script defer src="(\./studio-(?:domain-client|entry)-[a-f0-9]+\.js)"([^>]*)></script>')
+    return studio_start.sub(
+        lambda match: inline_javascript(
+            path_to_asset(page, match.group(1)).read_text(encoding="utf-8"), match.group(2)
+        ),
+        markup,
+    )
+
+
 def optimize_entry(path):
     page = site / path
     if not page.is_file():
@@ -121,11 +170,7 @@ def optimize_entry(path):
     if not matches:
         return
     paths = [link.group(1) for link in matches]
-    styles = [
-        ((site if href.startswith("/") else page.parent) / href.lstrip("./"))
-        .read_text(encoding="utf-8")
-        for href in paths
-    ]
+    styles = [path_to_asset(page, href).read_text(encoding="utf-8") for href in paths]
     if any("@import" in style or relative_url.search(style) for style in styles):
         raise ValueError(f"Check stylesheet paths before bundling {path}")
 
@@ -133,27 +178,32 @@ def optimize_entry(path):
     revision = sha256(css.encode()).hexdigest()[:12]
     bundle = f"/academy-assets/entry-{revision}.css"
     (site / bundle.lstrip("/")).write_text(css, encoding="utf-8")
+    lean = path in {"videoo/index.html", "learning-studio/index.html", "learning-studio/admin.html"}
     position = 0
 
     def use_bundle(link):
         nonlocal position
         position += 1
-        return f'<link rel="stylesheet" href="{bundle}">' if position == 1 else ""
+        return f'<link rel="stylesheet" href="{bundle}">' if position == 1 and not lean else ""
 
     markup = stylesheet.sub(use_bundle, markup)
     theme = (site / "academy-assets/theme.js").read_text(encoding="utf-8")
-    if "</script" in theme.lower():
-        raise ValueError("Theme startup code must be safe in the head")
     # Run the theme before first paint without a render-blocking network script.
     markup = re.sub(
         r'<script src="/academy-assets/theme\.js\?[^"]+"></script>',
-        lambda _: f"<script>{theme}</script>",
+        lambda _: inline_javascript(theme),
         markup,
         count=1,
     )
-    preload = "" if path.startswith("learning-studio/") else font
-    if path.startswith("videoo/"):
-        preload += video_api
+    markup = markup.replace(
+        'rel="icon" href="/Academy-Exam/assets/mofid-academy-logo.webp"',
+        'rel="icon" href="/Academy-Exam/assets/mofid-academy-logo-small.webp"',
+    )
+    if lean:
+        markup = lean_entry(markup, page, bundle)
+    preload = font if path == "index.html" else ""
+    if path == "videoo/admin.html":
+        preload = video_api
     page.write_text(markup.replace("<head>", "<head>\n" + preload, 1), encoding="utf-8")
 
 
@@ -218,14 +268,18 @@ def optimize_exam():
                 "fetch(assetURL('base.html'),{cache:'force-cache'})",
                 1,
             )
+            text = text.replace(
+                '<link rel="preload" href="../assets/Pinar-VF.woff" as="font" type="font/woff" crossorigin>',
+                "",
+            )
         else:
             text = enable_exam_entry(text)
-        if 'rel="preload" href="../assets/Pinar-VF.woff"' not in text:
+        if name == "index.html":
             connections = (
                 '<link rel="preconnect" href="https://mofid-academy.github.io" crossorigin>'
                 '<link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin>'
             )
-            text = text.replace("<head>", "<head>" + font + connections, 1)
+            text = text.replace("<head>", "<head>" + connections, 1)
         page.write_text(text, encoding="utf-8")
 
     admin_entry = path / "Admin" / "index.html"

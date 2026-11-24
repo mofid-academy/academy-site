@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const [source, output, client] = process.argv.slice(2);
 const origin = 'https://emofidacademy.ir';
-const portableFont = '/Academy-Exam/assets/Pinar-VF.woff';
+const portableFonts = "/Academy-Exam/assets/Pinar-VF";
 const pages = ['index.html', 'admin.html'];
 const studioAssets = [
   'academy-skin.css', 'portal.css', 'portal-config.json', 'presentation-preview.html',
@@ -25,26 +25,26 @@ function replaceOnce(text, before, after, name) {
   return text.replace(before, after);
 }
 
-function storeScript(name, script) {
-  const revision = createHash('sha256').update(script).digest('hex').slice(0, 12);
-  const file = name + '-' + revision + '.js';
-  runtimeFiles.set(file, script);
+function storeAsset(name, content, extension = 'js') {
+  const revision = createHash('sha256').update(content).digest('hex').slice(0, 12);
+  const file = name + '-' + revision + '.' + extension;
+  runtimeFiles.set(file, content);
   return file;
 }
 
 function extractRuntime(text, pattern, name) {
   const matched = text.match(pattern);
   if (!matched) throw Error('Check the updated Studio ' + name);
-  return {html: text.replace(matched[0], ''), file: storeScript(name, matched[1])};
+  return {html: text.replace(matched[0], ''), file: storeAsset(name, matched[1])};
 }
 
-const clientFile = storeScript('studio-domain-client', await readFile(client, 'utf8'));
-const entryFile = storeScript('studio-entry', await readFile(join(dirname(client), 'studio-entry.js'), 'utf8'));
+const clientFile = storeAsset('studio-domain-client', await readFile(client, 'utf8'));
+const entryFile = storeAsset('studio-entry', await readFile(join(dirname(client), 'studio-entry.js'), 'utf8'));
 
 function loginMarkup(admin) {
   return `<section id="studioEntry" class="panel mofid-entry-card" style="max-width:460px;margin:8vh auto;padding:28px">
     <div class="mofid-entry-heading">
-      <div class="mofid-entry-logo"><img src="/Academy-Exam/assets/mofid-academy-logo.webp" alt="مفید آکادمی" width="64" height="64"></div>
+      <div class="mofid-entry-logo"><img src="/Academy-Exam/assets/mofid-academy-logo-small.webp" alt="مفید آکادمی" width="64" height="64"></div>
       <div class="mofid-entry-wordmark" lang="en" dir="ltr">ACADEMY MOFID</div>
       <h1>${admin ? 'ورود سوپرادمین' : 'ورود شرکت‌کننده'}</h1>
       <p class="small-text muted">مفید آکادمی · استودیوی یادگیری</p>
@@ -94,7 +94,7 @@ async function buildPage(page) {
 
   const pdf = outputHtml.match(/<script>(\s*globalThis\.__MOFID_PDF_BINARIES=[\s\S]*?)<\/script>/);
   if (!pdf) throw Error('Check the updated Studio PDF resources');
-  const pdfFile = storeScript('pdf-assets', pdf[1]);
+  const pdfFile = storeAsset('pdf-assets', pdf[1]);
   let html = outputHtml.replace(pdf[0], '');
   html = replaceOnce(html, 'o=globalThis.__MOFID_PDF_BINARIES;class',
     'o=await window.MofidStudioDomain.loadPdfAssets();class', 'PDF loader');
@@ -110,12 +110,13 @@ async function buildPage(page) {
     '', 'portal stylesheet');
   const sidebarLogo = html.match(/var EE=`data:image\/png;base64,\/9j\/[A-Za-z0-9+/=]+`(?=,DE=)/);
   if (!sidebarLogo) throw Error('Check the embedded Studio sidebar logo');
-  html = html.replace(sidebarLogo[0], 'var EE="/Academy-Exam/assets/mofid-academy-logo.webp"');
+  html = html.replace(sidebarLogo[0], 'var EE="/Academy-Exam/assets/mofid-academy-logo-small.webp"');
 
   const inlineFonts = /(@font-face\{font-family:(?:Pinar|'Pinar VF');src:)url\((?:"|')?data:font\/[^)]+\)(?:\s*format\((?:"|')truetype(?:"|')\))?/gi;
   const fontCount = [...html.matchAll(inlineFonts)].length;
   if (fontCount !== 2) throw Error('Check the updated Studio variable fonts');
-  html = html.replace(inlineFonts, "$1url('" + portableFont + "') format('woff')");
+  html = html.replace(inlineFonts, "$1url('" + portableFonts + ".woff2') format('woff2'),"
+    + "url('" + portableFonts + ".woff') format('woff')");
   const vendor = extractRuntime(html, /<script>(\s*\(function\(\)\{var e=\{9306\(e,t,n\)[\s\S]*?)<\/script>/,
     'studio-vendor');
   const app = extractRuntime(vendor.html, /<script>(\s*\(function\(\)\{var e=Object\.create,t=Object\.defineProperty,[\s\S]*?)<\/script>/,
@@ -125,12 +126,15 @@ async function buildPage(page) {
   html = app.html.replace(presentation[0], '');
   html = html.replace(/<script src="(\/academy-assets\/entry-ui\.js)\?/g,
     '<script defer src="$1?');
+  const layout = html.match(/<style>([\s\S]*?)<\/style>/);
+  if (!layout || layout[1].length < 100000) throw Error('Check the updated Studio workspace styles');
+  const layoutFile = storeAsset('studio-layout', layout[1], 'css');
+  html = html.replace(layout[0], '<link rel="stylesheet" href="./' + layoutFile + '">');
 
   const routingHead = page === 'index.html'
     ? "<script>if(new URLSearchParams(location.search).get('portal')==='admin'){location.replace(new URL('./admin.html',location.href));}</script>"
     : '<meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer">';
   const head = routingHead
-    + '<link rel="preload" as="font" type="font/woff" crossorigin href="' + portableFont + '">'
     + '<script defer src="./' + clientFile + '" data-pdf="./' + pdfFile + '"></script>'
     + '<style>'
     + 'html[data-academy-app="studio"] :is(body,button,input,select,textarea,[role="dialog"],[data-mobile="true"])'
