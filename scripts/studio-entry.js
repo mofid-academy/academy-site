@@ -1,8 +1,7 @@
 (function () {
   'use strict';
 
-  const {role, vendor, runtime, presentation} = document.currentScript.dataset;
-  const key = 'mofid-studio-' + role + '-session';
+  const {role, sessionKey, vendor, runtime, presentation} = document.currentScript.dataset;
   const client = window.MofidStudioDomain;
   const shell = document.getElementById('studioEntry');
   const form = document.getElementById('studioLogin');
@@ -20,7 +19,7 @@
   const cleanup = window.MofidEntryUI?.mountLogin(shell);
 
   function readSession() {
-    try { return JSON.parse(sessionStorage.getItem(key) || 'null'); }
+    try { return JSON.parse(sessionStorage.getItem(sessionKey) || 'null'); }
     catch { return null; }
   }
 
@@ -81,7 +80,6 @@
     reveal.setAttribute('aria-label', show ? 'پنهان کردن رمز عبور' : 'نمایش رمز عبور');
     reveal.textContent = show ? 'پنهان' : 'نمایش';
   });
-  form.addEventListener('focusin', () => void client.prepare().catch(() => {}), {once: true});
   form.addEventListener('submit', async event => {
     event.preventDefault();
     if (button.disabled) return;
@@ -106,7 +104,7 @@
       if (typeof data.token !== 'string' || !data.token || !['admin', 'participant'].includes(data.user?.role)) {
         throw Error('پاسخ ورود معتبر نیست. دوباره تلاش کنید.');
       }
-      sessionStorage.setItem(key, JSON.stringify({token: data.token, user: data.user}));
+      sessionStorage.setItem(sessionKey, JSON.stringify({token: data.token, user: data.user}));
       form.elements.password.value = '';
       void launch();
     } catch (error) {

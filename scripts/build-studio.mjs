@@ -8,7 +8,7 @@ const origin = 'https://emofidacademy.ir';
 const portableFonts = "/Academy-Exam/assets/Pinar-VF";
 const pages = ['index.html', 'admin.html'];
 const studioAssets = [
-  'academy-skin.css', 'portal.css', 'portal-config.json', 'presentation-preview.html',
+  'academy-skin.css', 'portal.css', 'presentation-preview.html',
   'studio-routing.js', 'teaching-presentation.js', 'pdf',
 ];
 const runtimeFiles = new Map();
@@ -16,9 +16,9 @@ const [routing, loader] = await Promise.all(
   ['studio-routing.js', 'studio-loader.js'].map(file => readFile(join(source, file), 'utf8')),
 );
 const portal = JSON.parse(await readFile(join(source, 'portal-config.json'), 'utf8'));
-if (portal.enabled !== true || portal.apiUrl !== 'https://stodiomof.app.n8n.cloud/webhook/mofid-learning-portal') {
-  throw Error('Check the Studio portal configuration before publishing a different API.');
-}
+if (portal.enabled !== true) throw Error('The Studio portal must be enabled');
+portal.apiUrl = 'https://azmoon21.app.n8n.cloud/webhook/mofid-learning-portal';
+const portalOrigin = new URL(portal.apiUrl).origin;
 
 function replaceOnce(text, before, after, name) {
   if (text.split(before).length !== 2) throw Error('Check the updated Studio ' + name);
@@ -68,6 +68,10 @@ function loginMarkup(admin) {
 }
 
 async function buildPage(page) {
+  const admin = page === 'admin.html';
+  const role = admin ? 'admin' : 'participant';
+  const previousSessionKey = 'mofid-studio-' + role + '-session';
+  const sessionKey = previousSessionKey + ':' + portal.apiUrl;
   let outputHtml;
   const runtime = {
     location: { href: origin + '/learning-studio/' + page },
@@ -105,6 +109,10 @@ async function buildPage(page) {
     "const r=await fetch('portal-config.json?v=20261004',{cache:'no-store'});if(!r.ok)throw Error('تنظیمات پنل دریافت نشد.');const config=await r.json();",
     'const config=' + JSON.stringify(portal).replaceAll('<', '\\u003c') + ';',
     'portal config');
+  // Sessions from the previous n8n account must never be sent to the new one.
+  const legacySessionName = "'" + previousSessionKey + "'";
+  if (html.split(legacySessionName).length !== 4) throw Error('Check the Studio session storage calls');
+  html = html.replaceAll(legacySessionName, JSON.stringify(sessionKey));
   html = replaceOnce(html,
     "const mfStyle=document.createElement('link');mfStyle.rel='stylesheet';mfStyle.href='portal.css?v=20261004';document.head.appendChild(mfStyle);",
     '', 'portal stylesheet');
@@ -135,7 +143,9 @@ async function buildPage(page) {
     ? "<script>if(new URLSearchParams(location.search).get('portal')==='admin'){location.replace(new URL('./admin.html',location.href));}</script>"
     : '<meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer">';
   const head = routingHead
-    + '<script defer src="./' + clientFile + '" data-pdf="./' + pdfFile + '"></script>'
+    + '<link rel="preconnect" href="' + portalOrigin + '" crossorigin>'
+    + '<script defer src="./' + clientFile + '" data-portal="' + portal.apiUrl
+    + '" data-pdf="./' + pdfFile + '"></script>'
     + '<style>'
     + 'html[data-academy-app="studio"] :is(body,button,input,select,textarea,[role="dialog"],[data-mobile="true"])'
     + '{font-family:"Pinar VF",Pinar,Tahoma,sans-serif}'
@@ -148,9 +158,8 @@ async function buildPage(page) {
   if (!html.startsWith('<!doctype html>') || !html.includes('<head>')) throw Error('Studio document has no head');
   html = html.replace('<head>', '<head>' + head);
   html = html.replace('</head>', '<link rel="stylesheet" href="./portal.css?v=20261004"></head>');
-  const admin = page === 'admin.html';
-  const role = admin ? 'admin' : 'participant';
   const entry = '<script defer src="./' + entryFile + '" data-role="' + role
+    + '" data-session-key="' + sessionKey
     + '" data-vendor="./' + vendor.file + '" data-runtime="./' + app.file
     + '" data-presentation="' + presentation[1] + '"></script>';
   html = replaceOnce(html, '<div id="root"></div>', '<div id="root">' + loginMarkup(admin) + '</div>' + entry, 'root');
@@ -159,5 +168,6 @@ async function buildPage(page) {
 
 await mkdir(dirname(join(output, 'index.html')), { recursive: true });
 await Promise.all(studioAssets.map(path => cp(join(source, path), join(output, path), { recursive: true })));
+await writeFile(join(output, 'portal-config.json'), JSON.stringify(portal, null, 2) + '\n');
 for (const page of pages) await buildPage(page);
 await Promise.all([...runtimeFiles].map(([file, content]) => writeFile(join(output, file), content)));
