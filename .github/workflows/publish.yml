@@ -97,19 +97,6 @@ jobs:
                   if needle not in text:
                       raise ValueError(f"Check the updated timing loader in {page}")
                   page.write_text(text.replace(needle, "readLiveTiming()"), encoding="utf-8")
-              entry = exam / "index.html"
-              text = entry.read_text(encoding="utf-8")
-              needle = "fetch('base.html?v='+Date.now(),{cache:'no-store'})"
-              live_bank = existing_site + "/Academy-Exam/base.html"
-              if text.count(needle) != 1:
-                  raise ValueError(f"Check the updated question loader in {entry}")
-              read_bank = (
-                  f"fetch('{live_bank}?v='+Date.now(),"
-                  "{cache:'no-store',credentials:'omit',signal:AbortSignal.timeout(5000)})"
-                  ".then(response=>{if(!response.ok)throw Error('Live exam unavailable');return response;})"
-                  f".catch(()=>{needle})"
-              )
-              entry.write_text(text.replace(needle, read_bank), encoding="utf-8")
           else:
               forward("Academy-Exam/index.html", "ورود به آزمون آکادمی")
               forward("Academy-Exam/Admin/index.html", "پنل ساخت و مدیریت آزمون")

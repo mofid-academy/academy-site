@@ -25,12 +25,46 @@ function replaceOnce(text, before, after, name) {
   return text.replace(before, after);
 }
 
-function deferRuntime(text, pattern, name) {
+function storeScript(name, script) {
+  const revision = createHash('sha256').update(script).digest('hex').slice(0, 12);
+  const file = name + '-' + revision + '.js';
+  runtimeFiles.set(file, script);
+  return file;
+}
+
+function extractRuntime(text, pattern, name) {
   const matched = text.match(pattern);
   if (!matched) throw Error('Check the updated Studio ' + name);
-  const file = name + '-' + createHash('sha256').update(matched[1]).digest('hex').slice(0, 12) + '.js';
-  runtimeFiles.set(file, matched[1]);
-  return text.replace(matched[0], '<script defer src="./' + file + '"></script>');
+  return {html: text.replace(matched[0], ''), file: storeScript(name, matched[1])};
+}
+
+const clientFile = storeScript('studio-domain-client', await readFile(client, 'utf8'));
+const entryFile = storeScript('studio-entry', await readFile(join(dirname(client), 'studio-entry.js'), 'utf8'));
+
+function loginMarkup(admin) {
+  return `<section id="studioEntry" class="panel mofid-entry-card" style="max-width:460px;margin:8vh auto;padding:28px">
+    <div class="mofid-entry-heading">
+      <div class="mofid-entry-logo"><img src="/Academy-Exam/assets/mofid-academy-logo.webp" alt="مفید آکادمی" width="64" height="64"></div>
+      <div class="mofid-entry-wordmark" lang="en" dir="ltr">ACADEMY MOFID</div>
+      <h1>${admin ? 'ورود سوپرادمین' : 'ورود شرکت‌کننده'}</h1>
+      <p class="small-text muted">مفید آکادمی · استودیوی یادگیری</p>
+    </div>
+    <form id="studioLogin" method="post">
+      <div class="field"><label for="portal-username">نام کاربری</label>
+        <input id="portal-username" name="username" autocomplete="username" required maxlength="80" dir="ltr" autocapitalize="none" spellcheck="false">
+      </div>
+      <div class="field mofid-entry-password"><label for="portal-password">رمز عبور</label>
+        <input id="portal-password" name="password" type="password" autocomplete="current-password" required maxlength="200">
+        <button id="studioReveal" class="mofid-entry-reveal" type="button" aria-label="نمایش رمز عبور" aria-pressed="false">نمایش</button>
+      </div>
+      <button class="btn primary mofid-entry-submit" type="submit" disabled>ورود</button>
+    </form>
+    <p id="studioEntryMessage" class="small-text" role="status"></p>
+    <a id="studioEntryRetry" class="btn" href="" hidden>تلاش دوباره</a>
+    <p class="small-text muted">حساب جدید را فقط مدیر آکادمی ایجاد می‌کند.</p>
+    <a class="small-text" href="${admin ? './' : './admin.html'}">${admin ? 'ورود شرکت‌کننده' : 'ورود مدیریت استودیو'}</a>
+    <noscript>برای ورود، جاوااسکریپت مرورگر را فعال کنید.</noscript>
+  </section>`;
 }
 
 async function buildPage(page) {
@@ -60,24 +94,36 @@ async function buildPage(page) {
 
   const pdf = outputHtml.match(/<script>(\s*globalThis\.__MOFID_PDF_BINARIES=[\s\S]*?)<\/script>/);
   if (!pdf) throw Error('Check the updated Studio PDF resources');
-  const pdfFile = 'pdf-assets-' + createHash('sha256').update(pdf[1]).digest('hex').slice(0, 12) + '.js';
-  runtimeFiles.set(pdfFile, pdf[1]);
+  const pdfFile = storeScript('pdf-assets', pdf[1]);
   let html = outputHtml.replace(pdf[0], '');
   html = replaceOnce(html, 'o=globalThis.__MOFID_PDF_BINARIES;class',
     'o=await window.MofidStudioDomain.loadPdfAssets();class', 'PDF loader');
   html = replaceOnce(html,
     "fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,...payload,token:mofidPortalToken}),cache:'no-store'})",
     'window.MofidStudioDomain.request({action,...payload,token:mofidPortalToken})', 'portal transport');
+  html = replaceOnce(html,
+    "const r=await fetch('portal-config.json?v=20261004',{cache:'no-store'});if(!r.ok)throw Error('تنظیمات پنل دریافت نشد.');const config=await r.json();",
+    'const config=' + JSON.stringify(portal).replaceAll('<', '\\u003c') + ';',
+    'portal config');
+  html = replaceOnce(html,
+    "const mfStyle=document.createElement('link');mfStyle.rel='stylesheet';mfStyle.href='portal.css?v=20261004';document.head.appendChild(mfStyle);",
+    '', 'portal stylesheet');
+  const sidebarLogo = html.match(/var EE=`data:image\/png;base64,\/9j\/[A-Za-z0-9+/=]+`(?=,DE=)/);
+  if (!sidebarLogo) throw Error('Check the embedded Studio sidebar logo');
+  html = html.replace(sidebarLogo[0], 'var EE="/Academy-Exam/assets/mofid-academy-logo.webp"');
 
   const inlineFonts = /(@font-face\{font-family:(?:Pinar|'Pinar VF');src:)url\((?:"|')?data:font\/[^)]+\)(?:\s*format\((?:"|')truetype(?:"|')\))?/gi;
   const fontCount = [...html.matchAll(inlineFonts)].length;
   if (fontCount !== 2) throw Error('Check the updated Studio variable fonts');
   html = html.replace(inlineFonts, "$1url('" + portableFont + "') format('woff')");
-  html = deferRuntime(html, /<script>(\s*\(function\(\)\{var e=\{9306\(e,t,n\)[\s\S]*?)<\/script>/,
+  const vendor = extractRuntime(html, /<script>(\s*\(function\(\)\{var e=\{9306\(e,t,n\)[\s\S]*?)<\/script>/,
     'studio-vendor');
-  html = deferRuntime(html, /<script>(\s*\(function\(\)\{var e=Object\.create,t=Object\.defineProperty,[\s\S]*?)<\/script>/,
+  const app = extractRuntime(vendor.html, /<script>(\s*\(function\(\)\{var e=Object\.create,t=Object\.defineProperty,[\s\S]*?)<\/script>/,
     page === 'index.html' ? 'studio-student' : 'studio-admin');
-  html = html.replace(/<script src="(\/academy-assets\/entry-ui\.js|\.\/teaching-presentation\.js)\?/g,
+  const presentation = app.html.match(/<script src="(\.\/teaching-presentation\.js\?[^"]+)"><\/script>/);
+  if (!presentation) throw Error('Check the updated Studio presentation script');
+  html = app.html.replace(presentation[0], '');
+  html = html.replace(/<script src="(\/academy-assets\/entry-ui\.js)\?/g,
     '<script defer src="$1?');
 
   const routingHead = page === 'index.html'
@@ -85,10 +131,11 @@ async function buildPage(page) {
     : '<meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer">';
   const head = routingHead
     + '<link rel="preload" as="font" type="font/woff" crossorigin href="' + portableFont + '">'
-    + '<script defer src="./studio-domain-client.js" data-pdf="./' + pdfFile + '"></script>'
+    + '<script defer src="./' + clientFile + '" data-pdf="./' + pdfFile + '"></script>'
     + '<style>'
     + 'html[data-academy-app="studio"] :is(body,button,input,select,textarea,[role="dialog"],[data-mobile="true"])'
     + '{font-family:"Pinar VF",Pinar,Tahoma,sans-serif}'
+    + '#studioEntry [hidden]{display:none!important}#studioEntryMessage:empty{display:none}'
     + '@media(max-width:767px){html[data-academy-app="studio"] body{background-attachment:scroll}'
     + 'html[data-academy-app="studio"] :is(.topbar,.panel,.studio-sidebar [data-slot="sidebar-inner"]){'
     + 'backdrop-filter:none;-webkit-backdrop-filter:none}'
@@ -96,11 +143,17 @@ async function buildPage(page) {
     + '</style>';
   if (!html.startsWith('<!doctype html>') || !html.includes('<head>')) throw Error('Studio document has no head');
   html = html.replace('<head>', '<head>' + head);
+  html = html.replace('</head>', '<link rel="stylesheet" href="./portal.css?v=20261004"></head>');
+  const admin = page === 'admin.html';
+  const role = admin ? 'admin' : 'participant';
+  const entry = '<script defer src="./' + entryFile + '" data-role="' + role
+    + '" data-vendor="./' + vendor.file + '" data-runtime="./' + app.file
+    + '" data-presentation="' + presentation[1] + '"></script>';
+  html = replaceOnce(html, '<div id="root"></div>', '<div id="root">' + loginMarkup(admin) + '</div>' + entry, 'root');
   await writeFile(join(output, page), html);
 }
 
 await mkdir(dirname(join(output, 'index.html')), { recursive: true });
 await Promise.all(studioAssets.map(path => cp(join(source, path), join(output, path), { recursive: true })));
-await cp(client, join(output, 'studio-domain-client.js'));
 for (const page of pages) await buildPage(page);
 await Promise.all([...runtimeFiles].map(([file, content]) => writeFile(join(output, file), content)));

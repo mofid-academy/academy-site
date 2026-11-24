@@ -56,7 +56,8 @@
         }));
       }
 
-      const timeout = setTimeout(() => finish({ error: true }), 120000);
+      const wait = ['login', 'me'].includes(body.action) ? 15000 : 120000;
+      const timeout = setTimeout(() => finish({ error: true }), wait);
       port1.onmessage = event => finish(event.data);
       try {
         frame.postMessage({ type: 'mofid-studio-portal', body }, portalOrigin, [port2]);
@@ -87,5 +88,5 @@
     return pdfReady;
   }
 
-  window.MofidStudioDomain = Object.freeze({ request, loadPdfAssets });
+  window.MofidStudioDomain = Object.freeze({ request, loadPdfAssets, prepare: connect });
 })();

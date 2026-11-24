@@ -1,4 +1,5 @@
 from hashlib import sha256
+import json
 from pathlib import Path
 import re
 import sys
@@ -19,6 +20,96 @@ entry_mobile_styles = """
 }
 html[data-academy-app] :is(button,input,select,textarea){font-family:"Pinar VF",Tahoma,sans-serif}
 """
+exam_loading_style = """
+@font-face{font-family:"Pinar VF";src:url("/Academy-Exam/assets/Pinar-VF.woff") format("woff");font-weight:300 900;font-display:swap}
+#examEntry{font:400 1rem/1.9 "Pinar VF",Tahoma,sans-serif;max-width:34rem;margin:10vh auto;padding:1.5rem;
+  background:#fafffc;border:1px solid #c4ddce;border-radius:1.25rem;box-sizing:border-box}
+#examEntry header{display:flex;align-items:center;gap:.6rem}#examEntry h1{font-size:1.5rem}
+#examEntry input{display:block;box-sizing:border-box;width:100%;padding:.7rem;border:1px solid #b5d9c8;
+  border-radius:.65rem;color:#164d3b;background:white;font:inherit}
+#examEntry button{font:inherit;padding:.45rem 1rem;margin-top:.75rem;border:1px solid #a8d1bd;border-radius:.6rem}
+#examEntry button:not([disabled]){color:white;background:#0b766b;cursor:pointer}
+"""
+exam_loading_markup = """
+<main id="examEntry">
+  <header><img src="/Academy-Exam/assets/mofid-academy-logo.webp" alt="" width="48" height="48">
+    <strong>آکادمی مفید | سامانه آزمون</strong></header>
+  <h1>سلام، خوش آمدید</h1>
+  <label for="examEntryName">نام سازمانی</label>
+  <input type="text" id="examEntryName" placeholder="m.mirsheri" autocomplete="name">
+  <p id="examEntryStatus" role="status">در حال دریافت سؤال‌ها و زمان‌بندی آزمون…</p>
+  <button type="button" disabled>شروع آزمون</button>
+  <button id="examEntryRetry" type="button" hidden>تلاش دوباره</button>
+</main>
+"""
+
+
+def checked_replace(text, before, after):
+    if text.count(before) != 1:
+        raise ValueError(f"Check the updated exam entry around {before[:65]}")
+    return text.replace(before, after, 1)
+
+
+def enable_exam_entry(text):
+    text = checked_replace(text, "</style></head><body><p", exam_loading_style + "</style></head><body><p")
+    text, matched = re.subn(r"<body><p[^>]*>در حال آماده‌سازی آزمون…</p>", "<body>" + exam_loading_markup, text, count=1)
+    if matched != 1:
+        raise ValueError("Check the updated exam opening panel")
+    text = checked_replace(
+        text, '(async()=>{\n// Re-read', 'async function loadExam(){\n// Re-read'
+    )
+    text = checked_replace(
+        text,
+        """  const [baseR,tR,visual]=await Promise.all([
+    fetch('base.html?v='+Date.now(),{cache:'no-store'}),
+    readLiveTiming(),
+    visualAssets()
+  ]);
+  if(!baseR.ok) throw new Error('base '+baseR.status);
+  let base=await baseR.text();""",
+        """  async function readHTML(url, cache, timeout){
+    const response=await fetch(url,{cache,credentials:'omit',signal:AbortSignal.timeout(timeout)});
+    if(!response.ok)throw Error('Exam HTTP '+response.status);
+    return response.text();
+  }
+  async function readBank(){
+    let snapshot;
+    const readSnapshot=()=>snapshot??=readHTML(assetURL('base.html'),'force-cache',8000).catch(()=>null);
+    // Begin the bundled copy while a slow live download is still in progress.
+    const timer=setTimeout(readSnapshot,900);
+    try{
+      return await readHTML('https://mofid-academy.github.io/Academy-Exam/base.html?v='+Date.now(),'no-store',5000);
+    }catch{
+      const html=await readSnapshot();
+      if(!html)throw Error('سؤال‌های آزمون دریافت نشدند.');
+      return html;
+    }finally{clearTimeout(timer);}
+  }
+  let [base,tR,visual]=await Promise.all([readBank(),readLiveTiming(),visualAssets()]);"""
+    )
+    text = checked_replace(text, "  const cfg=tR;", """  const cfg=tR;
+  const draftName=document.getElementById('examEntryName').value.trim();""")
+    text = checked_replace(text, ";(()=>{\nconst cfg=", r""";(()=>{
+if(!name)name=${JSON.stringify(draftName).replace(/</g,'\\u003c')};
+const cfg=""")
+    text = checked_replace(text, "setTimeout(()=>refreshTiming(),0);\n", "")
+    text, matched = re.subn(
+        r"\}\)\(\)\.catch\(e=>\{document\.body\.innerHTML=.*?console\.error\(e\);\}\);",
+        """}
+const retry=document.getElementById('examEntryRetry'), status=document.getElementById('examEntryStatus');
+async function beginExam(){
+  retry.hidden=true;
+  status.textContent='در حال دریافت سؤال‌ها و زمان‌بندی آزمون…';
+  try{await loadExam();}
+  catch(e){status.textContent='بارگیری آزمون کامل نشد. دوباره تلاش کنید.';retry.hidden=false;console.error(e);}
+}
+retry.addEventListener('click',beginExam);
+void beginExam();""",
+        text, count=1
+    )
+    if matched != 1:
+        raise ValueError("Check the updated exam loading error handler")
+    return text
 
 
 def optimize_entry(path):
@@ -71,6 +162,17 @@ def optimize_exam():
     public_network = path / "public-network.js"
     if not public_network.is_file():
         return
+    network = checked_replace(
+        public_network.read_text(encoding="utf-8"),
+        'new URL(".", document.currentScript.src)',
+        'new URL(".", new URL("/Academy-Exam/public-network.js", location.href))',
+    )
+    if "</script" in network.lower():
+        raise ValueError("The timing client must be safe inside a script")
+    visual = json.dumps({
+        "css": (path / "exam-skin.css").read_text(encoding="utf-8"),
+        "script": (path / "exam-visual.js").read_text(encoding="utf-8"),
+    }, ensure_ascii=False).replace("<", "\\u003c")
     build_stamp = sha256()
     build_stamp.update(Path(__file__).read_bytes())
     for asset in sorted(path.rglob("*")):
@@ -92,23 +194,22 @@ def optimize_exam():
         text, changed = re.subn(r"const loadStamp=[^\n]+;", "const loadStamp='" + revision + "';", text, count=1)
         if changed != 1:
             raise ValueError(f"Check the updated exam asset versions in {name}")
-        # Download the form and appearance while the timing client starts.
+        # The timing client and appearance are build assets. Keep their reads
+        # out of the request chain for the live bank and timing configuration.
         network_path = "../public-network.js" if name.startswith("Admin/") else "public-network.js"
-        network_loader = (
-            "await new Promise((resolve,reject)=>{const script=document.createElement('script');"
-            f"script.src=assetURL('{network_path}')"
+        network_loader = re.compile(
+            r"^await new Promise\(\(resolve,reject\)=>\{const script=document\.createElement\('script'\);"
+            + r"script\.src=assetURL\('" + re.escape(network_path) + r"'\);[^\n]*\}\);$",
+            re.M,
         )
-        if text.count(network_loader) != 1 or text.count("    readLiveTiming(),") != 1:
+        text, networks = network_loader.subn(lambda _: network, text, count=1)
+        text, visuals = re.subn(
+            r"async function visualAssets\(\)\{\n try\{[\s\S]*?\n\}",
+            lambda _: "function visualAssets(){return " + visual + ";}",
+            text, count=1,
+        )
+        if networks != 1 or visuals != 1:
             raise ValueError(f"Check the updated exam startup in {name}")
-        text = text.replace(network_loader, network_loader.replace("await ", "const networkReady="), 1)
-        text = text.replace("    readLiveTiming(),", "    networkReady.then(()=>readLiveTiming()),", 1)
-        test_mode = "if(new URL(location.href).searchParams.get('academy-test')==='1'){"
-        text = text.replace(test_mode, test_mode + "\n await networkReady;", 1)
-        text = text.replace(
-            "const options={cache:'no-store',credentials:'omit',signal:AbortSignal.timeout(8000)};",
-            "const options={cache:'force-cache',credentials:'omit',signal:AbortSignal.timeout(8000)};",
-            1,
-        )
 
         # The admin's base is static loader code. Participant banks and timing remain live.
         if name.startswith("Admin/"):
@@ -117,8 +218,14 @@ def optimize_exam():
                 "fetch(assetURL('base.html'),{cache:'force-cache'})",
                 1,
             )
+        else:
+            text = enable_exam_entry(text)
         if 'rel="preload" href="../assets/Pinar-VF.woff"' not in text:
-            text = text.replace("<head>", "<head>" + font, 1)
+            connections = (
+                '<link rel="preconnect" href="https://mofid-academy.github.io" crossorigin>'
+                '<link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin>'
+            )
+            text = text.replace("<head>", "<head>" + font + connections, 1)
         page.write_text(text, encoding="utf-8")
 
     admin_entry = path / "Admin" / "index.html"
